@@ -1,0 +1,17 @@
+const express=require("express"),path=require("path"),fs=require("fs"),crypto=require("crypto"),bcrypt=require("bcryptjs"),jwt=require("jsonwebtoken");
+const app=express(),PORT=process.env.PORT||3000,SECRET=process.env.JWT_SECRET||"replace-this-secret";
+const db=path.join(__dirname,"db.json"); if(!fs.existsSync(db))fs.writeFileSync(db,JSON.stringify({owners:[],bookings:[]},null,2));
+const read=()=>JSON.parse(fs.readFileSync(db)); const write=x=>fs.writeFileSync(db,JSON.stringify(x,null,2));
+app.use(express.json()); app.use(express.static(path.join(__dirname,"public")));
+function token(o){return jwt.sign({id:o.id},SECRET,{expiresIn:"7d"})}
+function auth(req,res,next){try{let h=req.headers.authorization||"",t=h.startsWith("Bearer ")?h.slice(7):"";req.owner=jwt.verify(t,SECRET);next()}catch(e){res.status(401).json({error:"Login required"})}}
+app.post("/api/signup",async(req,res)=>{let {cafe,ownerName,email,password}=req.body;if(!cafe||!ownerName||!email||!password)return res.status(400).json({error:"All fields are required"});let d=read();if(d.owners.some(x=>x.email.toLowerCase()===email.toLowerCase()))return res.status(409).json({error:"Email already registered"});let o={id:crypto.randomUUID(),cafe,ownerName,email:email.toLowerCase(),password:await bcrypt.hash(password,10),createdAt:new Date().toISOString()};d.owners.push(o);write(d);res.json({token:token(o),owner:{id:o.id,cafe,ownerName,email:o.email}})});
+app.post("/api/login",async(req,res)=>{let {email,password}=req.body,d=read(),o=d.owners.find(x=>x.email===String(email).toLowerCase());if(!o||!(await bcrypt.compare(password,o.password)))return res.status(401).json({error:"Invalid email or password"});res.json({token:token(o),owner:{id:o.id,cafe:o.cafe,ownerName:o.ownerName,email:o.email}})});
+app.get("/api/me",auth,(req,res)=>{let o=read().owners.find(x=>x.id===req.owner.id);if(!o)return res.status(404).json({error:"Owner not found"});res.json({id:o.id,cafe:o.cafe,ownerName:o.ownerName,email:o.email})});
+app.post("/api/bookings",(req,res)=>{let {ownerId,name,phone,date,time,guests}=req.body;if(!ownerId||!name||!phone||!date||!time||!guests)return res.status(400).json({error:"Please complete the booking form"});let d=read();if(!d.owners.some(x=>x.id===ownerId))return res.status(404).json({error:"Café not found"});let b={id:crypto.randomUUID(),ownerId,name,phone,date,time,guests:Number(guests),status:"Pending",createdAt:new Date().toISOString()};d.bookings.push(b);write(d);res.json({ok:true,bookingId:b.id,notification:"New reservation received"})});
+app.get("/api/bookings",auth,(req,res)=>{let d=read();res.json(d.bookings.filter(b=>b.ownerId===req.owner.id).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt)))});
+app.patch("/api/bookings/:id",auth,(req,res)=>{let d=read(),b=d.bookings.find(x=>x.id===req.params.id&&x.ownerId===req.owner.id);if(!b)return res.status(404).json({error:"Booking not found"});if(!["Pending","Confirmed","Cancelled"].includes(req.body.status))return res.status(400).json({error:"Invalid status"});b.status=req.body.status;write(d);res.json(b)});
+app.get("/api/cafes/:id",(req,res)=>{let o=read().owners.find(x=>x.id===req.params.id);if(!o)return res.status(404).json({error:"Café not found"});res.json({id:o.id,cafe:o.cafe,ownerName:o.ownerName})});
+app.get("/admin",(req,res)=>res.sendFile(path.join(__dirname,"public","admin.html")));
+app.get("*",(req,res)=>res.sendFile(path.join(__dirname,"public","index.html")));
+app.listen(PORT,()=>console.log("Brew & Bloom running on port "+PORT));
